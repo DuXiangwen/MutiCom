@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -41,6 +41,9 @@ class SessionColumn(QFrame):
     changed = Signal(str)             # 配置有变化，外层去安排存盘
     saveLogRequested = Signal(str)
     managePresetsRequested = Signal()
+    dragStarted = Signal(str)          # 开始拖列头
+    dragMoved = Signal(QPoint)         # 全局坐标
+    dragFinished = Signal()
 
     MIN_WIDTH = 168
 
@@ -69,6 +72,9 @@ class SessionColumn(QFrame):
         header = QWidget()
         header.setObjectName("colHeader")
         header.setFixedHeight(30)
+        header.setCursor(Qt.CursorShape.OpenHandCursor)
+        header.setToolTip("按住列头可以拖动，调整列的先后顺序")
+        self._header = header
         hl = QHBoxLayout(header)
         hl.setContentsMargins(0, 0, 0, 4)
         hl.setSpacing(6)
@@ -92,6 +98,12 @@ class SessionColumn(QFrame):
         hl.addWidget(self.lbl_stats)
         hl.addWidget(self.btn_close)
         outer.addWidget(header)
+        # 列头里的文字/圆点不该吃鼠标事件，否则拖不动（✕ 保留自己的点击）
+        for w in (self.dot, self.lbl_title, self.lbl_live, self.lbl_stats):
+            w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        header.installEventFilter(self)
+        self._drag_origin: QPoint | None = None
+        self._dragging = False
 
         # -- 参数面板 ---------------------------------------------------
         self.panel = PortPanel(cfg.params)
@@ -126,7 +138,7 @@ class SessionColumn(QFrame):
         self.panel.paramsChanged.connect(self._on_params_changed)
         self.panel.dtrChanged.connect(self.session.set_dtr)
         self.panel.rtsChanged.connect(self.session.set_rts)
-        self.panel.breakClicked.connect(self.session.send_break)
+        self.panel.breakToggled.connect(self.session.set_break)
 
         self.toolbar.changed.connect(self._on_view_changed)
         self.toolbar.clearRequested.connect(self.log.clear_log)
@@ -164,6 +176,7 @@ class SessionColumn(QFrame):
         self._rate = 0.0
         params = self.panel.params()
         self.panel.set_connected(True, params.port)
+        self.panel.set_line_state(True, True)   # pyserial 打开串口时这两根线本来就是高的
         self.panel.btn_connect.setEnabled(True)
         self.panel.clear_error()
         self.dot.setOn(True)
@@ -198,6 +211,9 @@ class SessionColumn(QFrame):
         self._update_stats()
 
     def _on_send(self, payload: bytes) -> None:
+        if self._connected and self.panel.is_break_active:
+            self.log.append_system("[提示] Break 保持中，数据发不出去，先点 BRK 释放", "warn")
+            return
         if not self._connected:
             self.log.append_system("[提示] 未连接，发送被忽略", "warn")
             return
@@ -279,7 +295,12 @@ class SessionColumn(QFrame):
         self.send.set_presets(presets)
 
     def config(self) -> ColumnConfig:
-        self.cfg.params = self.panel.params()
+        # 逐字段写回，不要换对象：面板手里握着的是同一个 PortParams，
+        # 一旦这里 new 一个，面板后续改的就是旧对象，两边各说各话
+        # （表现：自动挑口永远觉得"这个口没人用"，新列全挑第一个口）
+        latest = self.panel.params()
+        for field in ("port", "baudrate", "bytesize", "parity", "stopbits", "flow"):
+            setattr(self.cfg.params, field, getattr(latest, field))
         self.cfg.draft = self.send.draft()
         return self.cfg
 
@@ -292,6 +313,33 @@ class SessionColumn(QFrame):
         self.session.shutdown()
 
     # ------------------------------------------------------------------ 分档
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if obj is not self._header:
+            return super().eventFilter(obj, event)
+        et = event.type()
+        if et == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+            self._drag_origin = event.globalPosition().toPoint()
+            self._dragging = False
+            return False
+        if et == QEvent.Type.MouseMove and self._drag_origin is not None:
+            pos = event.globalPosition().toPoint()
+            if not self._dragging:
+                if (pos - self._drag_origin).manhattanLength() < 8:
+                    return False          # 还没到阈值，继续当普通点击
+                self._dragging = True
+                self._header.setCursor(Qt.CursorShape.ClosedHandCursor)
+                self.dragStarted.emit(self.cfg.uid)
+            self.dragMoved.emit(pos)
+            return True
+        if et == QEvent.Type.MouseButtonRelease and self._drag_origin is not None:
+            self._drag_origin = None
+            if self._dragging:
+                self._dragging = False
+                self._header.setCursor(Qt.CursorShape.OpenHandCursor)
+                self.dragFinished.emit()
+                return True
+        return super().eventFilter(obj, event)
+
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         self._apply_tier(event.size().width())
@@ -300,12 +348,13 @@ class SessionColumn(QFrame):
     SHORT_HEIGHT = 560
 
     def _apply_tier(self, width: int) -> None:
+        # 工具条要每次都重算：档位没变但宽度变了（270→240）也会溢出，它有 _active 短路，开销可忽略
+        self.toolbar.apply_width(max(0, width - 18))
         tier = TIER_A if width >= 300 else (TIER_B if width >= 240 else TIER_C)
         if tier == self._tier:
             self._sync_collapse()
             return
         self._tier = tier
-        self.toolbar.apply_width(max(0, width - 18))   # 工具条比列窄 18（列外层边距 + 边框）
         self.panel.apply_tier(tier)
         self.send.apply_tier(tier)
         self.lbl_live.setVisible(self._connected and tier == TIER_A)

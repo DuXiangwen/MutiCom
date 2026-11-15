@@ -8,11 +8,13 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
+    QLabel,
     QScrollArea,
     QSplitter,
     QWidget,
@@ -33,6 +35,7 @@ class ColumnArea(QScrollArea):
     columnRemoved = Signal(str)
     columnChanged = Signal(str)          # 某列配置变了，外层安排存盘
     equalModeChanged = Signal(bool)
+    columnMoved = Signal()               # 列顺序变了，外层安排存盘
     saveLogRequested = Signal(str)
     managePresetsRequested = Signal()
 
@@ -66,6 +69,12 @@ class ColumnArea(QScrollArea):
         self._user_dragging = False
         self._splitter.splitterMoved.connect(self._on_splitter_moved)
 
+        # 拖拽排序的临时视觉件
+        self._drag_uid = ""
+        self._drop_at = -1
+        self._ghost: QLabel | None = None
+        self._indicator: QFrame | None = None
+
     # ------------------------------------------------------------------ 列管理
     @property
     def columns(self) -> list[SessionColumn]:
@@ -94,6 +103,9 @@ class ColumnArea(QScrollArea):
         col.saveLogRequested.connect(self.saveLogRequested)
         col.managePresetsRequested.connect(self.managePresetsRequested)
         col.stateChanged.connect(self._on_state_changed)
+        col.dragStarted.connect(self._begin_drag)
+        col.dragMoved.connect(self._drag_move)
+        col.dragFinished.connect(self._end_drag)
 
         self._splitter.addWidget(col)
         self._splitter.setStretchFactor(self._splitter.count() - 1, 1)
@@ -159,6 +171,103 @@ class ColumnArea(QScrollArea):
     def _on_state_changed(self, uid: str, _connected: bool) -> None:
         self._refresh_all()
         self.columnChanged.emit(uid)
+
+    # ------------------------------------------------------------------ 拖拽排序
+    def _begin_drag(self, uid: str) -> None:
+        col = next((c for c in self._columns if c.cfg.uid == uid), None)
+        if col is None:
+            return
+        self._drag_uid = uid
+        self._drop_at = self._columns.index(col)
+
+        pm = col.grab()
+        ghost = QLabel(self.viewport())
+        ghost.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        ghost.setPixmap(pm)
+        ghost.resize(col.size())          # 按逻辑尺寸摆，别用 pixmap 的物理像素
+        eff = QGraphicsOpacityEffect(ghost)
+        eff.setOpacity(0.65)
+        ghost.setGraphicsEffect(eff)
+        ghost.show()
+        self._ghost = ghost
+
+        ind = QFrame(self.viewport())
+        ind.setObjectName("dropIndicator")
+        ind.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        ind.setFixedWidth(3)
+        ind.hide()
+        self._indicator = ind
+
+    def _drag_move(self, global_pos: QPoint) -> None:
+        if self._ghost is None:
+            return
+        vp = self.viewport()
+        local = vp.mapFromGlobal(global_pos)
+        self._ghost.move(max(0, local.x() - self._ghost.width() // 2), 10)
+
+        idx = self._drop_index(global_pos)
+        self._drop_at = idx
+        x = self._indicator_x(idx)
+        if x is None or self._indicator is None:
+            return
+        self._indicator.setGeometry(max(0, x), 8, 3, max(20, vp.height() - 16))
+        self._indicator.show()
+
+    def _end_drag(self) -> None:
+        for w in (self._ghost, self._indicator):
+            if w is not None:
+                w.hide()
+                w.deleteLater()
+        self._ghost = None
+        self._indicator = None
+        uid, target = self._drag_uid, self._drop_at
+        self._drag_uid = ""
+        self._drop_at = -1
+        if uid:
+            self._reorder(uid, target)
+
+    def _drop_index(self, global_pos: QPoint) -> int:
+        """鼠标在某列中线左边，就插到它前面。"""
+        for i, col in enumerate(self._columns):
+            center = col.mapToGlobal(QPoint(col.width() // 2, 0)).x()
+            if global_pos.x() < center:
+                return i
+        return len(self._columns)
+
+    def _indicator_x(self, idx: int) -> int | None:
+        if not self._columns:
+            return None
+        vp = self.viewport()
+        if idx < len(self._columns):
+            col = self._columns[idx]
+            return col.mapTo(vp, QPoint(0, 0)).x() - 2
+        last = self._columns[-1]
+        return last.mapTo(vp, QPoint(last.width(), 0)).x() + 2
+
+    def _reorder(self, uid: str, target: int) -> None:
+        col = next((c for c in self._columns if c.cfg.uid == uid), None)
+        if col is None:
+            return
+        cur = self._columns.index(col)
+        if target > cur:
+            target -= 1                       # 移除后索引会前移一位
+        if target == cur or target < 0 or target >= len(self._columns):
+            return
+
+        widths = {c.cfg.uid: c.width() for c in self._columns}
+        self._columns.pop(cur)
+        self._columns.insert(target, col)
+        self._splitter.insertWidget(target, col)
+        for i in range(self._splitter.count()):
+            self._splitter.setStretchFactor(i, 1)
+
+        self._relabel()
+        self._refresh_all()                   # 占用提示里的"第 N 列"要跟着变
+        if self._equal:
+            self._relayout()
+        else:
+            self._splitter.setSizes([widths[c.cfg.uid] for c in self._columns])
+        self.columnMoved.emit()
 
     # ------------------------------------------------------------------ 宽度
     def resizeEvent(self, event) -> None:  # noqa: N802

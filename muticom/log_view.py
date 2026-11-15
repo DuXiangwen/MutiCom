@@ -23,7 +23,6 @@ from typing import Sequence
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QFontMetricsF, QPainter, QTextCursor
 from PySide6.QtWidgets import (
-    QButtonGroup,
     QSizePolicy,
     QHBoxLayout,
     QMenu,
@@ -272,10 +271,14 @@ class LogView(QPlainTextEdit):
         main = "等待数据…" if faded else "未连接"
         p.drawText(QRectF(0, top + icon_px + 10, w, 20), Qt.AlignmentFlag.AlignHCenter, main)
 
-        sub = self._conn_detail if faded else "选择端口后点击「连接」"
+        mode = "十六进制视图" if self._view.hex_mode else "文本视图"
+        base = self._conn_detail if faded else "选择端口后点击「连接」"
         f.setPointSize(8)
         p.setFont(f)
         fm = p.fontMetrics()
+        sub = f"{base} · {mode}"
+        if fm.horizontalAdvance(sub) > w - 24:
+            sub = mode
         if sub and fm.horizontalAdvance(sub) <= w - 24:
             p.drawText(QRectF(12, top + icon_px + 32, w - 24, 18), Qt.AlignmentFlag.AlignHCenter, sub)
         p.end()
@@ -302,17 +305,12 @@ class LogToolBar(QWidget):
         self.btn_ts.setChecked(view.timestamp)
         self.btn_ts.toggled.connect(self._on_ts)
 
-        # 文本 / 十六进制：两个互斥的文字按钮（VOFA+ 的 Abc / 1E）
-        self.btn_abc = ToolTextButton("Abc", "按文本显示")
+        # 文本 / 十六进制：一个开关。勾上=文本，取消=十六进制（默认勾上）
+        self.btn_abc = ToolTextButton(
+            "Abc", "文本显示（取消勾选 = 十六进制，按原始行对齐并带 ASCII 预览）", checkable=True
+        )
         self.btn_abc.setChecked(not view.hex_mode)
-        self.btn_abc.clicked.connect(lambda: self._set_hex(False))
-        self.btn_hex = ToolTextButton("1E", "按十六进制显示：原始行对齐，带偏移和 ASCII 预览")
-        self.btn_hex.setChecked(view.hex_mode)
-        self.btn_hex.clicked.connect(lambda: self._set_hex(True))
-        self._mode_group = QButtonGroup(self)
-        self._mode_group.setExclusive(True)
-        self._mode_group.addButton(self.btn_abc)
-        self._mode_group.addButton(self.btn_hex)
+        self.btn_abc.toggled.connect(self._on_abc_toggled)
 
         self.btn_tx = ThemedIconButton("arrow-up-right", "发送回显：把发出去的数据也显示在日志里", checkable=True)
         self.btn_tx.setChecked(view.show_tx)
@@ -345,7 +343,6 @@ class LogToolBar(QWidget):
         self._all = [
             self.btn_ts,
             self.btn_abc,
-            self.btn_hex,
             self.btn_tx,
             self.combo_enc,
             self.btn_scroll,
@@ -359,11 +356,11 @@ class LogToolBar(QWidget):
 
         # 三套配置，从全量往下降级；挤出去的项都在 ⋯ 菜单里
         self._configs = {
-            "full": [self.btn_ts, self.btn_abc, self.btn_hex, self.btn_tx, self.combo_enc,
+            "full": [self.btn_ts, self.btn_abc, self.btn_tx, self.combo_enc,
                      self.btn_scroll, self.btn_clear, self.btn_more],
-            "medium": [self.btn_ts, self.btn_abc, self.btn_hex, self.combo_enc,
+            "medium": [self.btn_ts, self.btn_abc, self.combo_enc,
                        self.btn_scroll, self.btn_clear, self.btn_more],
-            "minimal": [self.btn_ts, self.btn_abc, self.btn_hex, self.btn_more],
+            "minimal": [self.btn_ts, self.btn_abc, self.btn_more],
         }
         self._active = ""
 
@@ -461,12 +458,15 @@ class LogToolBar(QWidget):
         self._view.timestamp = on
         self.changed.emit()
 
+    def _on_abc_toggled(self, checked: bool) -> None:
+        """勾上=文本，取消=十六进制。"""
+        self._set_hex(not checked)
+
     def _set_hex(self, on: bool) -> None:
         self._view.hex_mode = on
-        for btn, value in ((self.btn_abc, not on), (self.btn_hex, on)):
-            btn.blockSignals(True)
-            btn.setChecked(value)
-            btn.blockSignals(False)
+        self.btn_abc.blockSignals(True)
+        self.btn_abc.setChecked(not on)
+        self.btn_abc.blockSignals(False)
         self.changed.emit()
 
     def _on_tx(self, on: bool) -> None:
@@ -511,7 +511,6 @@ class LogToolBar(QWidget):
             (self.btn_tx, self._view.show_tx),
             (self.btn_scroll, self._view.autoscroll),
             (self.btn_abc, not self._view.hex_mode),
-            (self.btn_hex, self._view.hex_mode),
         ):
             btn.blockSignals(True)
             btn.setChecked(value)

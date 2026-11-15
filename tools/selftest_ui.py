@@ -1,4 +1,4 @@
-"""界面流程自测（不需要串口）：覆盖「新增列 / 端口列表下发 / 删除列 / 配置回填」。
+"""界面流程自测（不需要串口）：覆盖「新增列 / 端口列表下发 / 删除列 / 配置回填 / 拖拽排序」。
 
 跑法：
     C:\\Python314\\python.exe tools\\selftest_ui.py
@@ -14,11 +14,37 @@ from pathlib import Path
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 
+from PySide6.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
+from PySide6.QtGui import QMouseEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from muticom.app_config import AppConfig, ColumnConfig, ConfigStore, PortParams  # noqa: E402
 from muticom.main_window import MainWindow  # noqa: E402
 from muticom.ui_kit import apply_theme  # noqa: E402
+
+
+def _send_mouse(w, etype, global_pos: QPoint) -> None:
+    local = QPointF(w.mapFromGlobal(global_pos))
+    ev = QMouseEvent(
+        etype,
+        local,
+        QPointF(global_pos),
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    QApplication.sendEvent(w, ev)
+
+
+def drag_header(col, target_global_x: int) -> None:
+    """按住列头拖到指定的全局 x 坐标再松手（含 8px 阈值判定）。"""
+    h = col._header
+    start = h.mapToGlobal(QPoint(h.width() // 2, h.height() // 2))
+    y = start.y()
+    _send_mouse(h, QEvent.Type.MouseButtonPress, start)
+    _send_mouse(h, QEvent.Type.MouseMove, QPoint(start.x() + 14, y))   # 先越过阈值
+    _send_mouse(h, QEvent.Type.MouseMove, QPoint(target_global_x, y))
+    _send_mouse(h, QEvent.Type.MouseButtonRelease, QPoint(target_global_x, y))
 
 
 def pump(app: QApplication, seconds: float = 0.3) -> None:
@@ -103,6 +129,64 @@ def main() -> int:
             fails.append("回填后下拉没有列表")
     win2.close()
     pump(app, 0.5)
+
+    # ---- 5. 拖拽排序 ---------------------------------------------------
+    win3 = MainWindow(
+        ConfigStore(Path(tempfile.mkdtemp()) / "c3.json"),
+        AppConfig(columns=[ColumnConfig(params=PortParams(port=p))
+                           for p in ("COM253", "COM254", "COM25", "COM10")]),
+    )
+    win3.resize(1400, 800)
+    win3.show()
+    pump(app, 0.8)
+    area = win3.area
+    before_order = [c.cfg.uid for c in area.columns]
+    if len(before_order) != 4:
+        fails.append(f"拖拽测试需要 4 列，实际 {len(before_order)}")
+
+    # 把第 1 列拖到第 3 列的右半边 → 期望顺序 [2,3,1,4]
+    third = area.columns[2]
+    target_x = third.mapToGlobal(QPoint(third.width() - 6, 0)).x()
+    drag_header(area.columns[0], target_x)
+    pump(app, 0.3)
+    after_order = [c.cfg.uid for c in area.columns]
+    print(f"[5] 拖拽 1->3 后：{before_order.index(after_order[0])} 列打头，顺序 {after_order}")
+    expect = [before_order[1], before_order[2], before_order[0], before_order[3]]
+    if after_order != expect:
+        fails.append(f"拖到第 3 列右侧后顺序不对：{after_order}（期望 {expect}）")
+
+    # 再把最后一列拖到最前面
+    last_col = area.columns[-1]
+    first_col = area.columns[0]
+    left_x = first_col.mapToGlobal(QPoint(6, 0)).x()
+    drag_header(last_col, left_x)
+    pump(app, 0.3)
+    final_order = [c.cfg.uid for c in area.columns]
+    expect2 = [expect[3], expect[0], expect[1], expect[2]]
+    print(f"[5] 再拖末列到最前：{final_order}")
+    if final_order != expect2:
+        fails.append(f"拖到最前顺序不对：{final_order}（期望 {expect2}）")
+
+    # 原位拖（移动距离没到阈值）不该改顺序
+    hold = [c.cfg.uid for c in area.columns]
+    h = area.columns[0]._header
+    same = h.mapToGlobal(QPoint(h.width() // 2, h.height() // 2))
+    _send_mouse(h, QEvent.Type.MouseButtonPress, same)
+    _send_mouse(h, QEvent.Type.MouseButtonRelease, QPoint(same.x() + 3, same.y()))
+    pump(app, 0.2)
+    if [c.cfg.uid for c in area.columns] != hold:
+        fails.append("没超过 8px 阈值却触发了重排（点击被误判成拖拽）")
+    else:
+        print("[5] 小幅移动没有误触发拖拽 ✓")
+
+    # 顺序要能存进配置
+    area.columnMoved.emit()
+    pump(app, 0.3)
+    saved = [c.uid for c in win3.cfg.columns]
+    if saved != final_order:
+        fails.append(f"配置里的列顺序没同步：{saved} vs {final_order}")
+    win3.close()
+    pump(app, 0.4)
 
     win.close()
     pump(app, 0.6)

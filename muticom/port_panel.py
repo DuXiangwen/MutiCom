@@ -98,7 +98,7 @@ class PortPanel(QFrame):
     paramsChanged = Signal()
     dtrChanged = Signal(bool)
     rtsChanged = Signal(bool)
-    breakClicked = Signal()
+    breakToggled = Signal(bool)
     collapsedChanged = Signal(bool)      # 用户点了抽屉头，外层负责持久化
 
     def __init__(self, params: PortParams, parent: QWidget | None = None) -> None:
@@ -202,9 +202,15 @@ class PortPanel(QFrame):
         self._labels.append(self.l_byte)
 
         # 控制线
-        self.btn_dtr = self._small_button("DTR", "切换 DTR 电平（勾上=有效）。注意：DTR 可能让 CH340/ESP 复位", True)
-        self.btn_rts = self._small_button("RTS", "切换 RTS 电平（勾上=有效）", True)
-        self.btn_break = self._small_button("BRK", "发送 100ms 的 Break 信号", False)
+        self.btn_dtr = self._small_button(
+            "DTR", "DTR 电平。很多板子把它接 RESET，点亮=拉高（可能复位板子）", True
+        )
+        self.btn_rts = self._small_button(
+            "RTS", "RTS 电平。常接 EN/BOOT0，或用于硬件流控，点亮=拉高", True
+        )
+        self.btn_break = self._small_button(
+            "BRK", "保持 Break（把 TX 拉低）；再点一下释放。保持期间发不出数据", True
+        )
         self.cell_line = QWidget()
         line_row = QHBoxLayout(self.cell_line)
         line_row.setContentsMargins(0, 0, 0, 0)
@@ -280,10 +286,11 @@ class PortPanel(QFrame):
         self.combo_baud.lineEdit().editingFinished.connect(self.paramsChanged)
         self.btn_dtr.toggled.connect(self.dtrChanged)
         self.btn_rts.toggled.connect(self.rtsChanged)
-        self.btn_break.clicked.connect(self.breakClicked)
+        self.btn_break.toggled.connect(self.breakToggled)
 
         self.apply_tier(TIER_A)
         self._apply_collapsed(False)
+        self.set_connected(False)      # 没连串口之前，控制线按钮点了也没意义，直接禁用
 
     # ------------------------------------------------------------------ 构件
     @staticmethod
@@ -447,6 +454,17 @@ class PortPanel(QFrame):
         if idx >= 0 and idx != self.combo_port.currentIndex():
             self.combo_port.setCurrentIndex(idx)
 
+    def set_line_state(self, dtr: bool, rts: bool) -> None:
+        """按串口的真实电平同步按钮显示（pyserial 打开时两根线默认都是拉高的）。"""
+        for btn, value in ((self.btn_dtr, dtr), (self.btn_rts, rts)):
+            btn.blockSignals(True)
+            btn.setChecked(value)
+            btn.blockSignals(False)
+
+    @property
+    def is_break_active(self) -> bool:
+        return self.btn_break.isChecked()
+
     def set_connected(self, connected: bool, port: str = "") -> None:
         self._connected = connected
         for w in (
@@ -469,7 +487,7 @@ class PortPanel(QFrame):
         self.btn_rts.setEnabled(connected)
         self.btn_break.setEnabled(connected)
         if not connected:
-            for btn in (self.btn_dtr, self.btn_rts):
+            for btn in (self.btn_dtr, self.btn_rts, self.btn_break):
                 btn.blockSignals(True)
                 btn.setChecked(False)
                 btn.blockSignals(False)

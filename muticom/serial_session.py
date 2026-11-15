@@ -106,6 +106,10 @@ class SerialWorker(QObject):
         self._pump_timer.stop()
         if self._ser is not None:
             try:
+                self._ser.break_condition = False   # 别把 TX 按在低电平上关串口
+            except Exception:  # noqa: BLE001
+                pass
+            try:
                 self._ser.close()
             except Exception:  # noqa: BLE001
                 pass
@@ -276,15 +280,25 @@ class SerialWorker(QObject):
         except Exception as exc:  # noqa: BLE001
             self.errorOccurred.emit(f"设置 {name.upper()} 失败：{_explain(exc)}")
 
-    @Slot()
-    def pulseBreak(self) -> None:
+    @Slot(bool)
+    def setBreak(self, on: bool) -> None:
+        """持续 Break：保持 TX 拉低直到显式释放。
+
+        个别 USB 转串口驱动不认 SetCommBreak（要么忽略、要么抛异常），
+        这里降级成脉冲并告知用户，别把串口搞哑。
+        """
         ser = self._ser
         if ser is None:
             return
         try:
-            ser.send_break(0.1)
+            ser.break_condition = on
         except Exception as exc:  # noqa: BLE001
-            self.errorOccurred.emit(f"发送 Break 失败：{_explain(exc)}")
+            if on:
+                try:
+                    ser.send_break(0.1)
+                    self.errorOccurred.emit("该串口驱动不支持保持 Break，已降级为 100ms 脉冲")
+                except Exception:  # noqa: BLE001
+                    self.errorOccurred.emit(f"发送 Break 失败：{_explain(exc)}")
 
 
 class SerialSession(QObject):
@@ -303,7 +317,7 @@ class SerialSession(QObject):
     _rulesRequested = Signal(object, bool)
     _dtrRequested = Signal(bool)
     _rtsRequested = Signal(bool)
-    _breakRequested = Signal()
+    _breakRequested = Signal(bool)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -319,7 +333,7 @@ class SerialSession(QObject):
         self._rulesRequested.connect(self._worker.applyRules)
         self._dtrRequested.connect(self._worker.setDtr)
         self._rtsRequested.connect(self._worker.setRts)
-        self._breakRequested.connect(self._worker.pulseBreak)
+        self._breakRequested.connect(self._worker.setBreak)
 
         self._worker.opened.connect(self._on_opened)
         self._worker.openFailed.connect(self.failed)
@@ -367,8 +381,8 @@ class SerialSession(QObject):
     def set_rts(self, on: bool) -> None:
         self._rtsRequested.emit(on)
 
-    def send_break(self) -> None:
-        self._breakRequested.emit()
+    def set_break(self, on: bool) -> None:
+        self._breakRequested.emit(on)
 
     def shutdown(self, timeout_ms: int = 2000) -> bool:
         """关窗口/删列时调用：先让 worker 关串口，再退出线程。"""

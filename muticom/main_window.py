@@ -126,6 +126,7 @@ class MainWindow(QMainWindow):
         self.area.columnAdded.connect(lambda *_: self._on_column_changed(""))
         self.area.columnRemoved.connect(lambda *_: self._on_column_changed(""))
         self.area.equalModeChanged.connect(lambda _on: self._schedule_save())
+        self.area.columnMoved.connect(lambda: self._on_column_changed(""))
         self.area.saveLogRequested.connect(self._save_column_log)
         self.area.managePresetsRequested.connect(self._open_presets)
         root.addWidget(self.area, 1)
