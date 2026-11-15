@@ -280,6 +280,13 @@ class SerialWorker(QObject):
         except Exception as exc:  # noqa: BLE001
             self.errorOccurred.emit(f"设置 {name.upper()} 失败：{_explain(exc)}")
 
+    @Slot()
+    def resetBuffer(self) -> None:
+        """清屏时一起清掉环形缓冲，否则切 Hex/文本会把刚清掉的数据重新吐出来。"""
+        self._raw.clear()
+        self._asm.reset()
+        self._pending.clear()
+
     @Slot(bool)
     def setBreak(self, on: bool) -> None:
         """持续 Break：保持 TX 拉低直到显式释放。
@@ -318,6 +325,7 @@ class SerialSession(QObject):
     _dtrRequested = Signal(bool)
     _rtsRequested = Signal(bool)
     _breakRequested = Signal(bool)
+    _resetRequested = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -334,6 +342,7 @@ class SerialSession(QObject):
         self._dtrRequested.connect(self._worker.setDtr)
         self._rtsRequested.connect(self._worker.setRts)
         self._breakRequested.connect(self._worker.setBreak)
+        self._resetRequested.connect(self._worker.resetBuffer)
 
         self._worker.opened.connect(self._on_opened)
         self._worker.openFailed.connect(self.failed)
@@ -383,6 +392,9 @@ class SerialSession(QObject):
 
     def set_break(self, on: bool) -> None:
         self._breakRequested.emit(on)
+
+    def reset_buffer(self) -> None:
+        self._resetRequested.emit()
 
     def shutdown(self, timeout_ms: int = 2000) -> bool:
         """关窗口/删列时调用：先让 worker 关串口，再退出线程。"""

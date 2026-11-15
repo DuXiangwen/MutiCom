@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import subprocess
+import re
 import sys
 import tempfile
 import time
@@ -121,9 +122,13 @@ def main() -> int:
     print("[3] Hex 视图前 2 行：")
     for ln in hex_lines[:2]:
         print("    ", ln)
-    if not hex_lines or "|" not in hex_lines[0]:
+    # 切 Hex 后"已连接"这类系统行会保留在最前面，先挑出真正的 hexdump 行再判格式
+    dump = [ln for ln in hex_lines if re.match(r"^[0-9A-F]{8}  ", ln)]
+    if not dump:
+        failures.append("Hex 视图里没有 hexdump 行")
+    elif "|" not in dump[0]:
         failures.append("Hex 视图没有 ASCII 预览列")
-    if hex_lines and len(hex_lines[0].split()[0]) != 8:
+    elif len(dump[0].split()[0]) != 8:
         failures.append("Hex 视图偏移不是 8 位")
     col_mon.view.hex_mode = False
     col_mon._on_view_changed()

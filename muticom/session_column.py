@@ -141,7 +141,7 @@ class SessionColumn(QFrame):
         self.panel.breakToggled.connect(self.session.set_break)
 
         self.toolbar.changed.connect(self._on_view_changed)
-        self.toolbar.clearRequested.connect(self.log.clear_log)
+        self.toolbar.clearRequested.connect(self._on_clear_requested)
         self.toolbar.saveLogRequested.connect(lambda: self.saveLogRequested.emit(self.cfg.uid))
         self.toolbar.copyAllRequested.connect(self._copy_all)
 
@@ -223,6 +223,11 @@ class SessionColumn(QFrame):
         self.session.send(payload)
 
     # ------------------------------------------------------------------ 视图
+    def _on_clear_requested(self) -> None:
+        self.log.clear_log()
+        # 缓冲也要清，不然切 Hex/文本会把刚清掉的数据重新吐回来
+        self.session.reset_buffer()
+
     def _on_collapsed_changed(self, collapsed: bool) -> None:
         self.cfg.panel_collapsed = collapsed
         self.changed.emit(self.cfg.uid)

@@ -76,6 +76,7 @@ class LogView(QPlainTextEdit):
         self._dropped = 0
         self._connected = False
         self._conn_detail = ""
+        self._sys_rows: list[tuple[str, str]] = []   # 系统提示行（已连接/断开…），重绘时要恢复
 
         self.setReadOnly(True)
         self.setUndoRedoEnabled(False)
@@ -130,7 +131,8 @@ class LogView(QPlainTextEdit):
     # ------------------------------------------------------------------ 写入
     def append_lines(self, lines: Sequence[tuple[str, str, int]], reset: bool = False) -> None:
         if reset:
-            self.clear_log()
+            # 重绘（切 Hex/文本、改规则）：保留"已连接"这类系统行，别把它们弄丢
+            self._redraw()
         if not lines:
             return
         overflow = len(self._pending) + len(lines) - MAX_PENDING
@@ -144,12 +146,21 @@ class LogView(QPlainTextEdit):
     def append_system(self, text: str, role: str = "sys") -> None:
         pal = self._engine.palette
         color = {"sys": pal.sys, "danger": pal.danger, "warn": pal.warn}.get(role, pal.sys)
+        self._sys_rows.append((text, color))
         self.append_lines([(text, color, 0)])
 
     def clear_log(self) -> None:
         self._pending.clear()
+        self._sys_rows.clear()
         self.clear()
         self._dropped = 0
+
+    def _redraw(self) -> None:
+        """重画内容但保留系统行（跟 clear_log 的区别就在这）。"""
+        self._pending.clear()
+        self.clear()
+        self._dropped = 0
+        self._pending.extend((text, color, 0) for text, color in self._sys_rows)
 
     def save_to_file(self, path: str | Path) -> int:
         text = self.toPlainText()
