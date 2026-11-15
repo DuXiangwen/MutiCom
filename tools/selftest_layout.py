@@ -200,6 +200,31 @@ def main() -> int:
                 if conn and col._tier <= 1 and not collapsed and col.lbl_stats.width() <= 0:
                     fails.append(f"{ctx}  lbl_stats 宽度为 0（连接后统计又不见了）")
 
+    # 字体断言：日志必须是等宽、字号跟 view 走、document 跟随。
+    # （QSS 的全局字体规则会在 polish 时盖掉 setFont，这里回归过一次：启动后显示微软雅黑 9pt）
+    def font_check(tag: str) -> None:
+        w = col.log.font()
+        d = col.log.document().defaultFont()
+        if not any(name in w.family() for name in ("Cascadia", "Consolas", "JetBrains", "Courier")):
+            fails.append(f"{tag}  日志字体不是等宽：{w.family()}")
+        if w.pointSize() != col.view.font_size:
+            fails.append(f"{tag}  日志字号 {w.pointSize()} != 配置 {col.view.font_size}")
+        if d.family() != w.family() or d.pointSize() != w.pointSize():
+            fails.append(f"{tag}  document 字体没跟随 widget：{d.pointSize()}pt/{d.family()}")
+
+    font_check("启动后")
+    apply_theme(app, "dark")
+    pump(app, 0.3)
+    font_check("切深色后")
+    col.toolbar._set_font(14)
+    pump(app, 0.3)
+    font_check("调到 14pt 后")
+    apply_theme(app, "light")
+    pump(app, 0.3)
+    font_check("切回浅色后(应保持 14pt)")
+    col.toolbar._set_font(10)
+    pump(app, 0.2)
+
     # 折叠收益
     host.resize(531, 760)
     pump(app, 0.25)

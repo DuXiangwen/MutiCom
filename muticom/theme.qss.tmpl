@@ -345,6 +345,13 @@ QPlainTextEdit {
     selection-color: ${selection.text};
     padding: 2px;
 }
+/* 日志区必须是等宽字体（hexdump 的 ASCII 预览列要对齐）。
+   注意 QSS 在 polish 时会盖掉之前 setFont 的结果，所以这里声明默认 10pt，
+   用户调的动态字号由 LogView 在 showEvent / StyleChange 后 _apply_font() 补上。 */
+QPlainTextEdit#logView {
+    font-family: "Cascadia Mono", Consolas, "JetBrains Mono", "Courier New", monospace;
+    font-size: 10pt;
+}
 QPlainTextEdit:focus {
     border-color: ${border.strong};
 }
@@ -352,6 +359,8 @@ QPlainTextEdit[error="true"] {
     border-color: ${danger};
 }
 QPlainTextEdit#sendEdit {
+    /* 发送框也用等宽：Hex 字节串看着才对得齐（中文按字体回退正常显示） */
+    font-family: "Cascadia Mono", Consolas, "JetBrains Mono", "Courier New", monospace;
     background: ${bg.input};
     border: 1px solid ${border};
     border-radius: 6px;

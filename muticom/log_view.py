@@ -20,7 +20,7 @@ from html import escape
 from pathlib import Path
 from typing import Sequence
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QFontMetricsF, QPainter, QTextCursor
 from PySide6.QtWidgets import (
     QSizePolicy,
@@ -95,6 +95,19 @@ class LogView(QPlainTextEdit):
 
         # 用户自己往上翻的时候顺手关掉自动滚屏，别一边看一边被拽回底部
         self.verticalScrollBar().actionTriggered.connect(self._on_scroll_action)
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        # QSS 的全局字体规则在 polish 时会盖掉 __init__ 里的 setFont
+        # （现象：日志显示成微软雅黑 9pt，切一次视图才"变回"等宽），
+        # polish 落地之后再设一次才稳。
+        self._apply_font()
+
+    def changeEvent(self, event) -> None:  # noqa: N802
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.StyleChange:
+            # 切主题会重新 polish，字体又被 QSS 打回默认，等样式落地后补回来
+            QTimer.singleShot(0, self._apply_font)
 
     # ------------------------------------------------------------------ 配置
     def _apply_font(self) -> None:
@@ -207,6 +220,7 @@ class LogView(QPlainTextEdit):
 
     def retint(self, engine: RuleEngine) -> None:
         """换主题后重新着色整个文档（保住滚动位置和行数）。"""
+        self._apply_font()          # 重插文本前确保字体正确，别把字号写死进 char format
         self._engine = engine
         text = self.toPlainText()
         if not text:
