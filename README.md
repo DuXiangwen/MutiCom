@@ -188,3 +188,7 @@ C:\Python314\python.exe -m PyInstaller --noconfirm --clean --name MutiCom --wind
 
 PyInstaller 对 Python 3.14 的支持要 6.16+，本机是 6.22.3。打包后配置仍写
 `%LOCALAPPDATA%`，不受安装目录只读影响。
+
+## 开源协议
+
+[MIT](LICENSE) —— 随便用、随便改、商用也行，保留版权声明即可。
