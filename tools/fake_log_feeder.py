@@ -48,6 +48,27 @@ MIXED = [
 
 PROGRESS = ["\rdownload {:3d}% [{}{}]"]
 
+# ANSI 模式：模拟真实固件「按模块上色、行尾 reset」的写法。
+# 模块 → SGR 色号，故意覆盖基本色和亮色，再掺几个 256 色验证降级。
+ANSI_MODULES = {
+    "modem": 34,      # 蓝
+    "dsp": 32,        # 绿
+    "ymodem": 33,     # 黄
+    "sensor": 36,     # 青
+    "app": 37,        # 白
+    "fault": 31,      # 红
+}
+
+ANSI_MSGS = [
+    ("modem", "data frame ready seq={n} expect={n} type=0x2"),
+    ("modem", "frame #{n} seq={n} len=1024 total={total}/1557262"),
+    ("dsp", "state -> CMD_A1_WAIT"),
+    ("ymodem", "block0 nak, retry=1"),
+    ("sensor", "温度 26.5C 电压 3.31V 电流 1.02A"),
+    ("app", "init done, ok"),
+    ("fault", "downlink fail: UPGRADE_FAILED"),
+]
+
 
 def now_stamp() -> str:
     t = time.time()
@@ -69,6 +90,15 @@ def build_line(mode: str, counter: int) -> bytes:
             return (line + "\r\n").encode(enc)
         except UnicodeEncodeError:
             return (line + "\r\n").encode("utf-8")
+    if mode == "ansi":
+        # 偶尔掺一条亮色 / 256 色，验证降级路径不吐垃圾字符
+        if counter and counter % 17 == 0:
+            return f"\x1b[0m\x1b[1;34m[bold] 亮蓝加粗 #{counter}\x1b[0m\r\n".encode()
+        if counter and counter % 23 == 0:
+            return f"\x1b[0m\x1b[38;5;196m[256] 真红 #{counter}\x1b[0m\r\n".encode()
+        mod, tpl = ANSI_MSGS[counter % len(ANSI_MSGS)]
+        text = tpl.format(n=counter, total=counter * 1024)
+        return f"\x1b[0m\x1b[{ANSI_MODULES[mod]}m[{mod}] {text}\x1b[0m\r\n".encode()
     if mode == "progress":
         pct = counter % 101
         bar = "#" * (pct // 4)
@@ -102,7 +132,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="往串口灌假日志")
     ap.add_argument("--port", default="COM253", help="要写入的端口（设备侧）")
     ap.add_argument("--baud", type=int, default=115200)
-    ap.add_argument("--mode", choices=["mixed", "raw", "progress", "junk", "plain"], default="mixed")
+    ap.add_argument(
+        "--mode",
+        choices=["mixed", "ansi", "raw", "progress", "junk", "plain"],
+        default="mixed",
+    )
     ap.add_argument("--rate", type=float, default=200, help="每秒多少条（0 = 不限速，能多快写多快）")
     ap.add_argument("--duration", type=float, default=0, help="跑多少秒，0 = 一直跑")
     ap.add_argument("--burst", type=int, default=0, help="先一次性写 N 字节，用来压突发")

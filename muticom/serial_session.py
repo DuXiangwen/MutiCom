@@ -44,7 +44,7 @@ class SerialWorker(QObject):
     opened = Signal()
     openFailed = Signal(str)
     closed = Signal()
-    linesReady = Signal(list, bool)   # [(文本, 颜色, 时间戳前缀长度)], 是否需要先清屏
+    linesReady = Signal(list, bool)   # [(文本, 颜色|None, 时间戳前缀长度, ANSI 槽位)], 是否需要先清屏
     statsDelta = Signal(int, int)     # 本次新增的 (收字节, 发字节)
     errorOccurred = Signal(str)
 
@@ -55,7 +55,7 @@ class SerialWorker(QObject):
         self._engine = RuleEngine()
         self._asm: TextAssembler | HexAssembler = TextAssembler()
         self._raw = bytearray()
-        self._pending: list[tuple[str, str, int]] = []
+        self._pending: list[tuple[str, str | None, int, int]] = []
         self._last_emit = 0.0
         self._last_rx = 0.0
         self._rx_bytes = 0
@@ -142,8 +142,8 @@ class SerialWorker(QObject):
 
         now = time.perf_counter()
         if self._asm.has_partial and (now - self._last_rx) > PARTIAL_TIMEOUT:
-            for text in self._asm.flush():
-                self._push_line(text)
+            for text, slot in self._asm.flush():
+                self._push_line(text, ansi=slot)
         self._maybe_flush(now)
 
     def _on_chunk(self, data: bytes) -> None:
@@ -152,21 +152,32 @@ class SerialWorker(QObject):
         self._raw += data
         if len(self._raw) > RAW_LIMIT:
             del self._raw[: len(self._raw) - RAW_LIMIT]
-        for text in self._asm.feed(data):
-            self._push_line(text)
+        for text, slot in self._asm.feed(data):
+            self._push_line(text, ansi=slot)
 
     # ------------------------------------------------------------------ 行缓冲
     def _ts_prefix(self) -> str:
         now = datetime.now()
         return now.strftime("[%H:%M:%S.") + f"{now.microsecond // 1000:03d}]"
 
-    def _push_line(self, text: str, color: str | None = None, *, stamp: bool = True) -> None:
+    def _push_line(
+        self,
+        text: str,
+        color: str | None = None,
+        *,
+        stamp: bool = True,
+        ansi: int = -1,
+    ) -> None:
         prefix_len = 0
         if stamp and self._view.timestamp:
             prefix = self._ts_prefix()
             text = prefix + text
             prefix_len = len(prefix)
-        self._pending.append((text, color or self._engine.color_for(text), prefix_len))
+        if color is None and ansi < 0:
+            # 没带 ANSI 颜色的行才走关键词规则；带了就把解析留给渲染侧，
+            # 好让色值跟着主题走（这里拿不到主题，也不该拿）。
+            color = self._engine.color_for(text)
+        self._pending.append((text, color, prefix_len, ansi))
 
     def _maybe_flush(self, now: float | None = None) -> None:
         if not self._pending:
@@ -255,11 +266,13 @@ class SerialWorker(QObject):
         if not buf:
             # 还没收到过任何字节：没有可重放的内容，别把用户已经看到的日志清掉
             return
-        lines: list[str] = []
+        lines: list[tuple[str, int]] = []
         for i in range(0, len(buf), 32768):
             lines.extend(self._asm.feed(buf[i : i + 32768]))
         lines.extend(self._asm.flush())
-        out = [(t, self._engine.color_for(t), 0) for t in lines]
+        # 有 ANSI 槽位的行不预着色，交给渲染侧按当前主题翻译；否则切 Hex 再切回来
+        # 彩色行会全退成正文色。
+        out = [(t, None if s >= 0 else self._engine.color_for(t), 0, s) for t, s in lines]
         self.linesReady.emit(out, True)
 
     # ------------------------------------------------------------------ 控制线

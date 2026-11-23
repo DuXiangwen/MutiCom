@@ -14,6 +14,8 @@ import re
 from dataclasses import dataclass
 from typing import Iterable, Sequence
 
+from .ansi import SLOT_NAMES
+
 
 @dataclass(frozen=True, slots=True)
 class LogPalette:
@@ -29,6 +31,8 @@ class LogPalette:
     sep: str
     sys: str
     ok: str
+    #: ANSI 16 色，索引就是 ansi.SLOT_NAMES 的顺序（0~15）
+    ansi: tuple[str, ...]
 
     @classmethod
     def from_tokens(cls, t: dict[str, str]) -> "LogPalette":
@@ -43,6 +47,7 @@ class LogPalette:
             sep=t["log.sep"],
             sys=t["log.sys"],
             ok=t["ok"],
+            ansi=tuple(t["ansi." + n] for n in SLOT_NAMES),
         )
 
 
@@ -171,4 +176,22 @@ _FALLBACK_TOKENS: dict[str, str] = {
     "warn": "#8a5f00",
     "danger": "#b42318",
     "ok": "#1a7f37",
+    # ANSI 槽位兜底（与 theme.LIGHT 保持一致）。缺任何一项都会让 RuleEngine()
+    # 在没拿到主题时构造失败 —— 而 SerialWorker.__init__ 正是这么构造的。
+    "ansi.black": "#24292f",
+    "ansi.red": "#a40e26",
+    "ansi.green": "#116329",
+    "ansi.yellow": "#7d4e00",
+    "ansi.blue": "#0550ae",
+    "ansi.magenta": "#6f42c1",
+    "ansi.cyan": "#0b6b60",
+    "ansi.white": "#4d5560",
+    "ansi.bright.black": "#57606a",
+    "ansi.bright.red": "#b42318",
+    "ansi.bright.green": "#1a7f37",
+    "ansi.bright.yellow": "#9a6700",
+    "ansi.bright.blue": "#0969da",
+    "ansi.bright.magenta": "#8250df",
+    "ansi.bright.cyan": "#1b7c83",
+    "ansi.bright.white": "#66707b",
 }

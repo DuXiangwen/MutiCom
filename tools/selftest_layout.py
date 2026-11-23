@@ -242,12 +242,14 @@ def main() -> int:
             print("  [FAIL]", f)
     print("=" * 60)
     print(f"检查 {cases} 组 / {widgets_checked} 个控件；折叠后日志多 {delta}px")
+    # 必须先停串口线程：host 是裸 QWidget，没有 MainWindow.closeEvent 帮忙收尾，
+    # 线程还在跑的时候解释器退出会崩，退出码 127 —— 会被误判成脚本挂了。
+    col.session.shutdown()
+    host.close()
     if fails:
         print(f"失败 {len(fails)} 条")
-        host.close()
         return 1
     print("全部通过")
-    host.close()
     return 0
 
 

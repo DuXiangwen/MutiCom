@@ -63,6 +63,24 @@ LIGHT: dict[str, str] = {
     "log.debug": "#5c6672",
     "log.sep": "#6f42c1",
     "log.sys": "#6e7781",
+    # ANSI 16 色（设备日志里的 SGR 颜色码）。浅色主题下终端那套亮色必须压明度：
+    # 97 亮白 #ffffff、93 亮黄 #ffff00 在白底上等于看不见，这里全部保证 ≥4.5:1。
+    "ansi.black": "#24292f",
+    "ansi.red": "#a40e26",
+    "ansi.green": "#116329",
+    "ansi.yellow": "#7d4e00",
+    "ansi.blue": "#0550ae",
+    "ansi.magenta": "#6f42c1",
+    "ansi.cyan": "#0b6b60",
+    "ansi.white": "#4d5560",
+    "ansi.bright.black": "#57606a",
+    "ansi.bright.red": "#b42318",
+    "ansi.bright.green": "#1a7f37",
+    "ansi.bright.yellow": "#9a6700",
+    "ansi.bright.blue": "#0969da",
+    "ansi.bright.magenta": "#8250df",
+    "ansi.bright.cyan": "#1b7c83",
+    "ansi.bright.white": "#66707b",
 }
 
 DARK: dict[str, str] = {
@@ -104,6 +122,25 @@ DARK: dict[str, str] = {
     "log.debug": "#8b949e",
     "log.sep": "#b392f0",
     "log.sys": "#7d8590",
+    # ANSI 16 色。深色背景下「亮色」才真的更亮，跟终端习惯一致。
+    # ansi.black 用 #5f6670（3.18:1）而不是更暗的灰：终端语义里黑就是最暗的前景色，
+    # 但在日志工具里「看不见内容」比「颜色不准」糟得多，这里取能读的下限。
+    "ansi.black": "#5f6670",
+    "ansi.red": "#f0616d",
+    "ansi.green": "#3fb950",
+    "ansi.yellow": "#d7ba7d",
+    "ansi.blue": "#6cb0f5",
+    "ansi.magenta": "#b392f0",
+    "ansi.cyan": "#4ec9b0",
+    "ansi.white": "#c9d1d9",
+    "ansi.bright.black": "#7d8590",
+    "ansi.bright.red": "#ff7a85",
+    "ansi.bright.green": "#56d364",
+    "ansi.bright.yellow": "#e3b341",
+    "ansi.bright.blue": "#79c0ff",
+    "ansi.bright.magenta": "#d2a8ff",
+    "ansi.bright.cyan": "#56d4dd",
+    "ansi.bright.white": "#f0f3f6",
 }
 
 THEMES = {"light": LIGHT, "dark": DARK}

@@ -70,7 +70,7 @@ def main() -> int:
     for col in win.area.columns:
         engine = col.log._engine
         col.log.append_lines(
-            [(t, engine.color_for(t), 15 if t.startswith("[00:04") else 0) for t in SAMPLE]
+            [(t, engine.color_for(t), 15 if t.startswith("[00:04") else 0, -1) for t in SAMPLE]
         )
 
     def shoot() -> None:

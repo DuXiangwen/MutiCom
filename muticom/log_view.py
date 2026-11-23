@@ -72,7 +72,7 @@ class LogView(QPlainTextEdit):
         self.setObjectName("logView")
         self._view = view
         self._engine = engine or RuleEngine()
-        self._pending: deque[tuple[str, str, int]] = deque(maxlen=MAX_PENDING)
+        self._pending: deque[tuple[str, str | None, int, int]] = deque(maxlen=MAX_PENDING)
         self._dropped = 0
         self._connected = False
         self._conn_detail = ""
@@ -142,7 +142,7 @@ class LogView(QPlainTextEdit):
         return self._dropped
 
     # ------------------------------------------------------------------ 写入
-    def append_lines(self, lines: Sequence[tuple[str, str, int]], reset: bool = False) -> None:
+    def append_lines(self, lines: Sequence[tuple[str, str | None, int, int]], reset: bool = False) -> None:
         if reset:
             # 重绘（切 Hex/文本、改规则）：保留"已连接"这类系统行，别把它们弄丢
             self._redraw()
@@ -160,7 +160,7 @@ class LogView(QPlainTextEdit):
         pal = self._engine.palette
         color = {"sys": pal.sys, "danger": pal.danger, "warn": pal.warn}.get(role, pal.sys)
         self._sys_rows.append((text, color))
-        self.append_lines([(text, color, 0)])
+        self.append_lines([(text, color, 0, -1)])
 
     def clear_log(self) -> None:
         self._pending.clear()
@@ -173,7 +173,7 @@ class LogView(QPlainTextEdit):
         self._pending.clear()
         self.clear()
         self._dropped = 0
-        self._pending.extend((text, color, 0) for text, color in self._sys_rows)
+        self._pending.extend((text, color, 0, -1) for text, color in self._sys_rows)
 
     def save_to_file(self, path: str | Path) -> int:
         text = self.toPlainText()
@@ -194,6 +194,7 @@ class LogView(QPlainTextEdit):
             # 不先插一个 block 的话，新的 <p> 会并到最后一行里
             cursor.insertBlock()
         cursor.insertHtml(html)
+        self._attach_slots(batch)
 
         if self._view.autoscroll:
             self.moveCursor(QTextCursor.MoveOperation.End)
@@ -202,10 +203,34 @@ class LogView(QPlainTextEdit):
         if self._pending and not self._timer.isActive():
             self._timer.start()
 
-    def _render(self, batch: Sequence[tuple[str, str, int]]) -> str:
-        ts_color = self._engine.palette.ts
+    def _attach_slots(self, rows: Sequence[tuple[str, str | None, int, int]]) -> None:
+        """把 ANSI 槽位挂到刚插入的最后 len(rows) 个 block 上。
+
+        用「从尾部倒数」定位，同时躲开两个偏差：`setMaximumBlockCount` 会在插入过程中
+        裁头，`insertHtml` 的第一个 `<p>` 会并进当前 block 而不是新建。新行永远在末尾，
+        所以倒数定位一定对。
+        """
+        doc = self.document()
+        if not rows:
+            return
+        if len(rows) > doc.blockCount():
+            rows = rows[-doc.blockCount() :]
+        start = doc.blockCount() - len(rows)
+        for i, row in enumerate(rows):
+            slot = row[3]
+            if slot >= 0:
+                block = doc.findBlockByNumber(start + i)
+                if block.isValid():
+                    block.setUserState(slot)
+
+    def _render(self, batch: Sequence[tuple[str, str | None, int, int]]) -> str:
+        pal = self._engine.palette
+        ts_color = pal.ts
+        ansi = pal.ansi
         parts: list[str] = []
-        for text, color, ts_len in batch:
+        for text, color, ts_len, slot in batch:
+            if color is None:
+                color = ansi[slot] if 0 <= slot < len(ansi) else pal.text
             if ts_len and len(text) > ts_len:
                 ts = escape(text[:ts_len])
                 rest = escape(text[ts_len:])
@@ -219,20 +244,32 @@ class LogView(QPlainTextEdit):
         return "".join(parts)
 
     def retint(self, engine: RuleEngine) -> None:
-        """换主题后重新着色整个文档（保住滚动位置和行数）。"""
+        """换主题后重新着色整个文档（保住滚动位置、行数和 ANSI 颜色）。"""
         self._apply_font()          # 重插文本前确保字体正确，别把字号写死进 char format
         self._engine = engine
+        doc = self.document()
         text = self.toPlainText()
         if not text:
             self.update()
             return
         bar = self.verticalScrollBar()
         keep = bar.value()
-        rows: list[tuple[str, str, int]] = []
-        for line in text.split("\n"):
+
+        # ANSI 原文早在解码层就剥离了，`toPlainText()` 里没有颜色信息 —— 颜色只能从
+        # block 的 userState 里捞。必须在 clear() 之前读完，否则跟着 block 一起没了。
+        slots: list[int] = []
+        for i in range(doc.blockCount()):
+            b = doc.findBlockByNumber(i)
+            slots.append(b.userState() if b.isValid() else -1)
+
+        rows: list[tuple[str, str | None, int, int]] = []
+        for i, line in enumerate(text.split("\n")):
             m = _TS_RE.match(line)
             ts_len = len(m.group(0)) if m else 0
-            if line.startswith(SYS):
+            slot = slots[i] if i < len(slots) else -1
+            if slot >= 0:
+                color = None                      # 交给 _render 按新主题翻译
+            elif line.startswith(SYS):
                 color = engine.palette.sys
             elif line.startswith(ERR):
                 color = engine.palette.danger
@@ -240,7 +277,7 @@ class LogView(QPlainTextEdit):
                 color = engine.palette.warn
             else:
                 color = engine.color_for(line)
-            rows.append((line, color, ts_len))
+            rows.append((line, color, ts_len, slot))
 
         self.setUpdatesEnabled(False)
         try:
@@ -253,7 +290,9 @@ class LogView(QPlainTextEdit):
             for i in range(0, len(rows), step):
                 if i:
                     cursor.insertBlock()
-                cursor.insertHtml(self._render(rows[i : i + step]))
+                chunk = rows[i : i + step]
+                cursor.insertHtml(self._render(chunk))
+                self._attach_slots(chunk)
         finally:
             self.setUpdatesEnabled(True)
         bar.setValue(min(keep, bar.maximum()))
